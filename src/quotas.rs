@@ -12,9 +12,96 @@
 //! Nunca se inventan límites ni se hacen llamadas de red.
 
 use crate::collectors::{home, parse_ts};
-use chrono::{DateTime, Datelike, Local, TimeZone, Timelike, Utc};
+use crate::model::UsageEvent;
+use chrono::{DateTime, Datelike, Duration, Local, TimeZone, Timelike, Utc};
 use serde_json::Value;
+use std::collections::HashMap;
 use std::io::{BufRead, BufReader};
+
+/// Ritmo real de uso local de un agente en ventanas de 5 h y 7 días,
+/// comparado contra su propio pico histórico local (nunca inventa límites oficiales).
+#[derive(Debug, Clone, Default)]
+pub struct LocalPace {
+    pub tokens_5h: u64,
+    pub turns_5h: u64,
+    pub tokens_7d: u64,
+    pub turns_7d: u64,
+    pub peak_5h: u64,
+    pub peak_7d: u64,
+    pub last_seen: Option<DateTime<Utc>>,
+    pub estimated: bool,
+}
+
+impl LocalPace {
+    pub fn pct_of_peak_5h(&self) -> f64 {
+        if self.peak_5h == 0 {
+            0.0
+        } else {
+            (self.tokens_5h as f64 / self.peak_5h as f64 * 100.0).clamp(0.0, 100.0)
+        }
+    }
+
+    pub fn pct_of_peak_7d(&self) -> f64 {
+        if self.peak_7d == 0 {
+            0.0
+        } else {
+            (self.tokens_7d as f64 / self.peak_7d as f64 * 100.0).clamp(0.0, 100.0)
+        }
+    }
+}
+
+/// Calcula el ritmo local (5 h y 7 días) y el pico histórico por agente en O(N).
+pub fn compute_local_pace(events: &[UsageEvent], now: DateTime<Utc>) -> HashMap<&'static str, LocalPace> {
+    let mut by_agent: HashMap<&'static str, Vec<&UsageEvent>> = HashMap::new();
+    for e in events {
+        by_agent.entry(e.agent).or_default().push(e);
+    }
+
+    let cutoff_5h = now - Duration::hours(5);
+    let cutoff_7d = now - Duration::days(7);
+    let mut out = HashMap::new();
+
+    for (agent, mut evs) in by_agent {
+        evs.sort_by_key(|e| e.ts);
+        let mut pace = LocalPace {
+            last_seen: evs.last().map(|e| e.ts),
+            estimated: evs.iter().all(|e| e.estimated),
+            ..Default::default()
+        };
+        for e in &evs {
+            let tok = e.total_input() + e.output;
+            if e.ts >= cutoff_7d {
+                pace.tokens_7d += tok;
+                pace.turns_7d += 1;
+            }
+            if e.ts >= cutoff_5h {
+                pace.tokens_5h += tok;
+                pace.turns_5h += 1;
+            }
+        }
+        pace.peak_5h = sliding_max_tokens(&evs, Duration::hours(5)).max(pace.tokens_5h);
+        pace.peak_7d = sliding_max_tokens(&evs, Duration::days(7)).max(pace.tokens_7d);
+        out.insert(agent, pace);
+    }
+    out
+}
+
+fn sliding_max_tokens(sorted: &[&UsageEvent], window: Duration) -> u64 {
+    let mut best = 0u64;
+    let mut sum = 0u64;
+    let mut left = 0usize;
+    for (right, e) in sorted.iter().enumerate() {
+        sum += e.total_input() + e.output;
+        while left < right && (e.ts - sorted[left].ts) > window {
+            sum = sum.saturating_sub(sorted[left].total_input() + sorted[left].output);
+            left += 1;
+        }
+        if sum > best {
+            best = sum;
+        }
+    }
+    best
+}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum QuotaLevel {
@@ -440,5 +527,36 @@ mod tests {
         let rec_reset = recommend(&q_reset, &["Claude Code", "Antigravity"], now);
         assert_eq!(rec_reset.level, QuotaLevel::Green);
         assert!(rec_reset.text.contains("ya se reinició"));
+    }
+
+    #[test]
+    fn local_pace_computes_5h_7d_and_peaks() {
+        let now = Utc::now();
+        let mk = |ago_hours: i64, tok: u64| UsageEvent {
+            agent: "Claude Code",
+            provider: "Anthropic",
+            model: "Opus 5.5".into(),
+            ts: now - Duration::hours(ago_hours),
+            input: tok,
+            cache_read: 0,
+            cache_write: 0,
+            output: 0,
+            session: "s".into(),
+            estimated: false,
+        };
+        let events = vec![
+            mk(200, 500), // hace >7 días (pico 5h antiguo = 500)
+            mk(201, 400), // junto con el anterior: pico 5h = 900
+            mk(24, 300),  // en últimos 7 días
+            mk(1, 200),   // en últimas 5 h
+        ];
+        let map = compute_local_pace(&events, now);
+        let p = &map["Claude Code"];
+        assert_eq!(p.tokens_5h, 200);
+        assert_eq!(p.turns_5h, 1);
+        assert_eq!(p.tokens_7d, 500);
+        assert_eq!(p.turns_7d, 2);
+        assert_eq!(p.peak_5h, 900);
+        assert_eq!(p.peak_7d, 900);
     }
 }

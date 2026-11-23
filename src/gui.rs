@@ -306,7 +306,7 @@ impl App {
             gui_plans::show_plans_view(ui, &self.events, self.range, &mut self.config, &mut self.plans_state);
         } else if self.tab == Tab::Quotas {
             let secs = self.last_loaded.map(|t| t.elapsed().as_secs());
-            gui_quotas::show_quotas_view(ui, &self.quotas, &cache.agents, secs);
+            gui_quotas::show_quotas_view(ui, &self.events, &self.quotas, &cache.agents, secs);
         } else {
             ui.columns(4, |c| {
                 let t = &s.cur;

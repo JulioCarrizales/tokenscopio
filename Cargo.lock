@@ -3234,6 +3234,7 @@ dependencies = [
  "egui_extras",
  "image",
  "rusqlite",
+ "serde",
  "serde_json",
  "walkdir",
  "winresource",

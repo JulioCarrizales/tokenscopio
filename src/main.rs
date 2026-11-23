@@ -5,6 +5,7 @@ mod collectors;
 mod config;
 mod gui;
 mod gui_plans;
+mod gui_quotas;
 mod model;
 mod portfolio;
 mod pricing;

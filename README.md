@@ -17,7 +17,18 @@
 - **Tareas, turnos y tiempo de agentes**, incluido cuántas sesiones corrieron a la vez.
 - **Tokens por día** (entrada arriba, salida abajo) y un **heatmap** de a qué hora trabajan tus agentes.
 - **Modelos y agentes**: clic en un agente para ver solo su uso.
+- **Portafolio de suscripciones** (pestaña **Planes**): registra tus suscripciones (proveedor, nombre, precio mensual, moneda y agentes que cubre) y compáralas contra el valor equivalente en API prorrateado al rango seleccionado, con rendimiento (`12.4x`), semáforo (verde ≥ 3x, amarillo 1–3x, rojo < 1x) y tabla de precios por modelo editable.
 - Rangos de 7, 30 y 90 días o todo el historial.
+
+## Portafolio de suscripciones y precios
+
+Desde el botón **Planes** en el encabezado puedes gestionar tu portafolio sin salir del modo 100% local:
+
+1. **Registra tus planes** (Anthropic, OpenAI, Google, Cursor u otro): indica nombre, precio mensual, moneda (`USD`, `PEN`, `MXN`, `EUR`, etc.) y qué agentes cubre cada plan (por ejemplo: Claude Pro → Claude Code, ChatGPT Plus → Codex, Google AI Pro → Antigravity, Cursor Pro → Cursor).
+2. **Tipo de cambio manual**: elige la moneda de visualización y ajusta el tipo de cambio contra `USD` directamente en la interfaz (sin llamadas a internet).
+3. **Precios por modelo (API)**: en la sub-pestaña **Precios por modelo (API)** puedes revisar, editar o agregar precios en USD por millón de tokens (entrada, caché de lectura, caché de escritura y salida). Los modelos sin precio configurado se muestran explícitamente como `sin precio` en lugar de inventar tarifas.
+4. **Semáforo de rendimiento**: compara el valor equivalente en API contra el costo del plan prorrateado al rango elegido (`costo_mensual × días / 30`). Verde ≥ 3x, amarillo entre 1x y 3x, rojo < 1x. Si un plan incluye tokens estimados de Cursor, su valor aparece marcado con `≈`.
+5. **Almacenamiento local**: toda la configuración (suscripciones, tipos de cambio y tabla de precios) se guarda en `%APPDATA%\Tokenscopio\config.json`. Nada sale de tu equipo.
 
 ## ¿De dónde salen los datos?
 
@@ -65,8 +76,12 @@ El ejecutable queda en `target\release\tokenscopio.exe`.
 ```
 src/
   collectors/   un lector por agente + decodificador de protobuf
+  config.rs     configuración local (%APPDATA%\Tokenscopio\config.json)
+  pricing.rs    tabla de precios por modelo (USD por 1M tokens)
+  portfolio.rs  cálculo de valor equivalente en API, prorrateo y rendimiento
   stats.rs      totales, series por día, heatmap, agrupación por modelo y agente
-  gui.rs        la interfaz (egui)
+  gui.rs        interfaz principal (egui)
+  gui_plans.rs  vista de Portafolio de suscripciones y editor de precios
   main.rs       ventana e ícono
 assets/         ícono de la app y logos de marcas
 ```

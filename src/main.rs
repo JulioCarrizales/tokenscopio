@@ -8,6 +8,7 @@ mod gui_plans;
 mod model;
 mod portfolio;
 mod pricing;
+mod quotas;
 mod stats;
 
 use eframe::egui;

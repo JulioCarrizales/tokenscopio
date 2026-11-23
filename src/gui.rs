@@ -2,6 +2,7 @@ use crate::collectors;
 use crate::config::Config;
 use crate::gui_plans::{self, PlansState};
 use crate::model::UsageEvent;
+use crate::quotas::{self, AgentQuota, QuotaLevel};
 use crate::stats::{self, change, duration, human, Range, Row, Stats};
 use eframe::egui::{self, include_image, Align, Align2, Color32, FontId, ImageSource, Layout, Pos2, Rect, RichText, Sense, Stroke, Vec2};
 use std::sync::mpsc::{channel, Receiver};
@@ -16,6 +17,7 @@ const INPUT: Color32 = Color32::from_rgb(72, 72, 72);
 const INPUT_HI: Color32 = Color32::from_rgb(120, 120, 120);
 const OUTPUT: Color32 = Color32::from_rgb(64, 150, 255);
 pub(crate) const GOOD: Color32 = Color32::from_rgb(70, 200, 110);
+pub(crate) const WARN: Color32 = Color32::from_rgb(235, 190, 65);
 pub(crate) const BAD: Color32 = Color32::from_rgb(230, 95, 85);
 const HOVER: Color32 = Color32::from_rgb(30, 30, 30);
 
@@ -29,7 +31,7 @@ enum Tab {
     Plans,
 }
 
-type Loaded = (Vec<UsageEvent>, Vec<String>);
+type Loaded = (Vec<UsageEvent>, Vec<String>, Vec<AgentQuota>);
 
 struct Cache {
     range: Range,
@@ -41,6 +43,7 @@ struct Cache {
 pub struct App {
     events: Vec<UsageEvent>,
     warnings: Vec<String>,
+    quotas: Vec<AgentQuota>,
     loading: Option<Receiver<Loaded>>,
     range: Range,
     filter: Option<String>,
@@ -76,6 +79,7 @@ impl App {
         let mut app = App {
             events: vec![],
             warnings: vec![],
+            quotas: vec![],
             loading: None,
             range: Range::Days(30),
             filter: None,
@@ -100,7 +104,9 @@ impl App {
         let (tx, rx) = channel();
         let ctx = ctx.clone();
         std::thread::spawn(move || {
-            let _ = tx.send(collectors::collect_all());
+            let (events, warnings) = collectors::collect_all();
+            let quotas = quotas::collect_all();
+            let _ = tx.send((events, warnings, quotas));
             ctx.request_repaint();
         });
         self.loading = Some(rx);
@@ -110,9 +116,10 @@ impl App {
 impl eframe::App for App {
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
         if let Some(rx) = &self.loading {
-            if let Ok((events, warnings)) = rx.try_recv() {
+            if let Ok((events, warnings, quotas)) = rx.try_recv() {
                 self.events = events;
                 self.warnings = warnings;
+                self.quotas = quotas;
                 self.loading = None;
                 self.cache = None;
             }
@@ -312,6 +319,8 @@ impl App {
                 if let Some(f) = agents_section(&mut c[1], &cache.agents, self.filter.as_deref()) {
                     act.filter = Some(f);
                 }
+                c[1].add_space(6.0);
+                quotas_section(&mut c[1], &self.quotas, &cache.agents);
             });
 
             for w in &self.warnings {
@@ -736,7 +745,7 @@ fn all_models_window(ctx: &egui::Context, s: &Stats, open: &mut bool) {
 /// Devuelve Some(nuevo filtro) si se hizo clic en un agente.
 fn agents_section(ui: &mut egui::Ui, agents: &[Row], filter: Option<&str>) -> Option<Option<String>> {
     section(ui, "AGENTES", "clic en uno para ver solo su uso");
-    ui.add_space(34.0);
+    ui.add_space(4.0);
     table_header(ui, ["entrada", "salida", "tiempo"]);
     let max = agents.first().map(|a| a.input + a.output).unwrap_or(0).max(1) as f32;
     let mut out = None;
@@ -756,4 +765,127 @@ fn agents_section(ui: &mut egui::Ui, agents: &[Row], filter: Option<&str>) -> Op
         ui.label(RichText::new("Sin actividad en este rango").color(DIM));
     }
     out
+}
+
+fn quota_level_color(level: QuotaLevel) -> Color32 {
+    match level {
+        QuotaLevel::Green => GOOD,
+        QuotaLevel::Yellow => WARN,
+        QuotaLevel::Red => BAD,
+        QuotaLevel::Unknown => DIM,
+    }
+}
+
+fn quotas_section(ui: &mut egui::Ui, quotas: &[AgentQuota], active_agents: &[Row]) {
+    let now = chrono::Utc::now();
+    let active_names: Vec<&str> = active_agents.iter().map(|a| a.name.as_str()).collect();
+    let rec = quotas::recommend(quotas, &active_names, now);
+    let rec_col = quota_level_color(rec.level);
+
+    section(ui, "CUOTAS", "pasa el cursor para ver la regla");
+
+    // Recomendación en una línea con tooltip explicativo.
+    let rec_resp = egui::Frame::new()
+        .fill(rec_col.gamma_multiply(0.11))
+        .stroke(Stroke::new(1.0_f32, rec_col.gamma_multiply(0.35)))
+        .corner_radius(6.0)
+        .inner_margin(egui::Margin::symmetric(8, 3))
+        .show(ui, |ui| {
+            ui.set_width(ui.available_width());
+            ui.horizontal(|ui| {
+                let (r, _) = ui.allocate_exact_size(Vec2::splat(8.0), Sense::hover());
+                ui.painter().circle_filled(r.center(), 3.5, rec_col);
+                ui.add(egui::Label::new(RichText::new(&rec.text).size(12.5).color(TEXT)).truncate());
+            });
+        })
+        .response;
+    rec_resp.on_hover_text(rec.tooltip);
+
+    ui.add_space(3.0);
+
+    // Agentes con datos de cuota: fila completa con barra, %, ventana y reinicio.
+    let (with_data, without_data): (Vec<&AgentQuota>, Vec<&AgentQuota>) =
+        quotas.iter().partition(|q| !q.windows.is_empty());
+
+    for q in with_data {
+        let (rect, resp) = ui.allocate_exact_size(Vec2::new(ui.available_width(), 22.0), Sense::hover());
+        let p = ui.painter_at(rect);
+        let cy = rect.center().y;
+        let col = quota_level_color(q.level(now));
+
+        p.circle_filled(Pos2::new(rect.left() + 5.0, cy), 3.5, col);
+        paint_icon(ui, Pos2::new(rect.left() + 20.0, cy), 15.0, agent_logo(q.agent), agent_color(q.agent));
+        p.text(Pos2::new(rect.left() + 33.0, cy), Align2::LEFT_CENTER, q.agent, FontId::proportional(13.5), TEXT);
+
+        if let Some(w) = q.critical_window(now) {
+            let eff = w.effective_percent(now);
+            let reset_str = w
+                .resets_at
+                .map(|r| quotas::format_reset(r, now))
+                .unwrap_or_default();
+
+            let bar_x = rect.left() + 126.0;
+            let bar_w = 56.0;
+            let bar_rect = Rect::from_min_size(Pos2::new(bar_x, cy - 2.5), Vec2::new(bar_w, 5.0));
+            p.rect_filled(bar_rect, 2.5, Color32::from_rgb(36, 36, 36));
+            if eff > 0.0 {
+                let fill_w = (bar_w * (eff as f32 / 100.0)).max(3.0);
+                p.rect_filled(Rect::from_min_size(bar_rect.min, Vec2::new(fill_w, 5.0)), 2.5, col);
+            }
+
+            let detail = if reset_str.is_empty() {
+                format!("{eff:.0}% · {}", w.short_window())
+            } else {
+                format!("{eff:.0}% · {} · {reset_str}", w.short_window())
+            };
+            p.text(Pos2::new(bar_x + bar_w + 8.0, cy), Align2::LEFT_CENTER, detail, FontId::proportional(13.0), TEXT);
+
+            let mut tip_lines = vec![format!(
+                "{}{}",
+                q.agent,
+                q.plan_type.as_deref().map(|t| format!(" (plan {t})")).unwrap_or_default()
+            )];
+            for win in &q.windows {
+                let r_txt = win
+                    .resets_at
+                    .map(|r| quotas::format_reset(r, now))
+                    .unwrap_or_else(|| "sin fecha de reinicio".into());
+                if win.is_reset(now) {
+                    tip_lines.push(format!(
+                        "• Ventana {}: 0% vigente ({r_txt}; último registro: {:.0}%)",
+                        win.short_window(),
+                        win.used_percent
+                    ));
+                } else {
+                    tip_lines.push(format!(
+                        "• Ventana {}: {:.0}% usado ({r_txt})",
+                        win.short_window(),
+                        win.used_percent
+                    ));
+                }
+            }
+            if let Some(obs) = q.observed_at {
+                let loc = obs.with_timezone(&chrono::Local);
+                tip_lines.push(format!("Último dato en log: {}", loc.format("%d %b %Y %H:%M")));
+            }
+            resp.on_hover_text(tip_lines.join("\n"));
+        }
+    }
+
+    // Agentes sin archivo local de cuotas: línea compacta para mantener todo en una pantalla.
+    if !without_data.is_empty() {
+        ui.add_space(2.0);
+        ui.horizontal_wrapped(|ui| {
+            ui.spacing_mut().item_spacing.x = 6.0;
+            ui.label(RichText::new("Sin datos de cuota:").size(12.0).color(DIM));
+            for q in &without_data {
+                let (r, resp) = ui.allocate_exact_size(Vec2::splat(14.0), Sense::hover());
+                paint_icon(ui, r.center(), 13.0, agent_logo(q.agent), agent_color(q.agent));
+                let lbl = ui.label(RichText::new(q.agent).size(12.0).color(Color32::from_rgb(120, 120, 120)));
+                let tip = format!("{} no guarda límites ni porcentajes de cuota en archivos locales.", q.agent);
+                resp.on_hover_text(&tip);
+                lbl.on_hover_text(tip);
+            }
+        });
+    }
 }

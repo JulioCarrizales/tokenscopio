@@ -1,0 +1,24 @@
+[package]
+name = "tokenscopio"
+version = "1.0.0"
+edition = "2021"
+authors = ["Julio Carrizales"]
+description = "Tokenscopio: panel de escritorio con el uso de tus agentes de IA (Claude Code, Codex, Antigravity, Cursor) leyendo sus logs locales"
+license = "MIT"
+
+[dependencies]
+anyhow = "1"
+chrono = { version = "0.4", features = ["serde"] }
+dirs = "5"
+eframe = "0.31"
+egui_extras = { version = "0.31", features = ["image"] }
+image = { version = "0.25", default-features = false, features = ["png"] }
+rusqlite = { version = "0.32", features = ["bundled"] }
+serde_json = "1"
+walkdir = "2"
+
+[build-dependencies]
+winresource = "0.1"
+
+[profile.release]
+opt-level = 3

@@ -18,6 +18,7 @@
 - **Tokens por día** (entrada arriba, salida abajo) y un **heatmap** de a qué hora trabajan tus agentes.
 - **Modelos y agentes**: clic en un agente para ver solo su uso.
 - **Portafolio de suscripciones** (pestaña **Planes**): registra tus suscripciones (proveedor, nombre, precio mensual, moneda y agentes que cubre) y compáralas contra el valor equivalente en API prorrateado al rango seleccionado, con rendimiento (`12.4x`), semáforo (verde ≥ 3x, amarillo 1–3x, rojo < 1x) y tabla de precios por modelo editable.
+- **Semáforo de cuotas con recomendación**: lee los límites locales disponibles (p. ej. `rate_limits` de Codex en `~/.codex/sessions`), muestra % usado, ventana y cuándo se reinicia, y da una recomendación en una línea (con la regla explicada en un tooltip). Los agentes que no guardan cuotas en disco se muestran como `sin datos de cuota`.
 - Rangos de 7, 30 y 90 días o todo el historial.
 
 ## Portafolio de suscripciones y precios
@@ -79,6 +80,7 @@ src/
   config.rs     configuración local (%APPDATA%\Tokenscopio\config.json)
   pricing.rs    tabla de precios por modelo (USD por 1M tokens)
   portfolio.rs  cálculo de valor equivalente en API, prorrateo y rendimiento
+  quotas.rs     lectura local de cuotas/límites por agente y recomendación
   stats.rs      totales, series por día, heatmap, agrupación por modelo y agente
   gui.rs        interfaz principal (egui)
   gui_plans.rs  vista de Portafolio de suscripciones y editor de precios

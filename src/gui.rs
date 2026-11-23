@@ -1,25 +1,33 @@
 use crate::collectors;
+use crate::config::Config;
+use crate::gui_plans::{self, PlansState};
 use crate::model::UsageEvent;
 use crate::stats::{self, change, duration, human, Range, Row, Stats};
 use eframe::egui::{self, include_image, Align, Align2, Color32, FontId, ImageSource, Layout, Pos2, Rect, RichText, Sense, Stroke, Vec2};
 use std::sync::mpsc::{channel, Receiver};
 
 const BG: Color32 = Color32::from_rgb(8, 8, 8);
-const CARD: Color32 = Color32::from_rgb(22, 22, 22);
-const BORDER: Color32 = Color32::from_rgb(40, 40, 40);
-const TEXT: Color32 = Color32::from_rgb(236, 236, 236);
-const DIM: Color32 = Color32::from_rgb(140, 140, 140);
+pub(crate) const CARD: Color32 = Color32::from_rgb(22, 22, 22);
+pub(crate) const BORDER: Color32 = Color32::from_rgb(40, 40, 40);
+pub(crate) const TEXT: Color32 = Color32::from_rgb(236, 236, 236);
+pub(crate) const DIM: Color32 = Color32::from_rgb(140, 140, 140);
 const SPARK: Color32 = Color32::from_rgb(80, 80, 80);
 const INPUT: Color32 = Color32::from_rgb(72, 72, 72);
 const INPUT_HI: Color32 = Color32::from_rgb(120, 120, 120);
 const OUTPUT: Color32 = Color32::from_rgb(64, 150, 255);
-const GOOD: Color32 = Color32::from_rgb(70, 200, 110);
-const BAD: Color32 = Color32::from_rgb(230, 95, 85);
+pub(crate) const GOOD: Color32 = Color32::from_rgb(70, 200, 110);
+pub(crate) const BAD: Color32 = Color32::from_rgb(230, 95, 85);
 const HOVER: Color32 = Color32::from_rgb(30, 30, 30);
 
 const SECTION_H: f32 = 30.0;
 const ROW_H: f32 = 28.0;
 const NUM_W: f32 = 76.0;
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Tab {
+    Overview,
+    Plans,
+}
 
 type Loaded = (Vec<UsageEvent>, Vec<String>);
 
@@ -36,8 +44,19 @@ pub struct App {
     loading: Option<Receiver<Loaded>>,
     range: Range,
     filter: Option<String>,
+    tab: Tab,
+    config: Config,
+    plans_state: PlansState,
     cache: Option<Cache>,
     all_models_open: bool,
+    snap: Option<SnapState>,
+}
+
+struct SnapState {
+    dir: std::path::PathBuf,
+    step: u8,
+    wait: u8,
+    pending: bool,
 }
 
 impl App {
@@ -49,14 +68,28 @@ impl App {
         // Siempre oscuro, aunque Windows esté en tema claro.
         cc.egui_ctx.set_theme(egui::ThemePreference::Dark);
         cc.egui_ctx.set_visuals_of(egui::Theme::Dark, visuals);
+        let (config, cfg_warn) = Config::load();
+        let mut plans_state = PlansState::default();
+        if let Some(w) = cfg_warn {
+            plans_state.status_msg = Some((w, true));
+        }
         let mut app = App {
             events: vec![],
             warnings: vec![],
             loading: None,
             range: Range::Days(30),
             filter: None,
+            tab: Tab::Overview,
+            config,
+            plans_state,
             cache: None,
             all_models_open: false,
+            snap: std::env::var_os("TOKENSCOP_SNAP").map(|d| SnapState {
+                dir: std::path::PathBuf::from(d),
+                step: 0,
+                wait: 4,
+                pending: false,
+            }),
         };
         app.start_load(&cc.egui_ctx);
         app
@@ -96,6 +129,56 @@ impl eframe::App for App {
                 }
                 self.dashboard(ui);
             });
+
+        self.tick_snap(ctx);
+    }
+}
+
+impl App {
+    fn tick_snap(&mut self, ctx: &egui::Context) {
+        if self.loading.is_some() {
+            return;
+        }
+        let Some(sn) = &mut self.snap else { return };
+        let captured = ctx.input(|i| {
+            i.events.iter().find_map(|e| match e {
+                egui::Event::Screenshot { image, .. } => Some(image.clone()),
+                _ => None,
+            })
+        });
+        if let Some(img) = captured {
+            let name = if sn.step == 0 { "fase1_resumen.png" } else { "fase1_planes.png" };
+            let _ = std::fs::create_dir_all(&sn.dir);
+            let _ = image::save_buffer(
+                sn.dir.join(name),
+                img.as_raw(),
+                img.width() as u32,
+                img.height() as u32,
+                image::ColorType::Rgba8,
+            );
+            sn.pending = false;
+            if sn.step == 0 {
+                sn.step = 1;
+                sn.wait = 4;
+                self.tab = Tab::Plans;
+                ctx.request_repaint();
+            } else {
+                self.snap = None;
+                ctx.send_viewport_cmd(egui::ViewportCommand::Close);
+            }
+            return;
+        }
+        if sn.pending {
+            ctx.request_repaint();
+            return;
+        }
+        if sn.wait > 0 {
+            sn.wait -= 1;
+            ctx.request_repaint();
+        } else {
+            sn.pending = true;
+            ctx.send_viewport_cmd(egui::ViewportCommand::Screenshot(egui::UserData::default()));
+        }
     }
 }
 
@@ -103,12 +186,13 @@ impl eframe::App for App {
 struct Actions {
     range: Option<Range>,
     filter: Option<Option<String>>,
+    tab: Option<Tab>,
     reload: bool,
 }
 
 // ---------- logos ----------
 
-fn agent_logo(name: &str) -> Option<ImageSource<'static>> {
+pub(crate) fn agent_logo(name: &str) -> Option<ImageSource<'static>> {
     Some(match name {
         "Claude Code" => include_image!("../assets/logos/claude-color.png"),
         "Antigravity" => include_image!("../assets/logos/antigravity-color.png"),
@@ -118,7 +202,7 @@ fn agent_logo(name: &str) -> Option<ImageSource<'static>> {
     })
 }
 
-fn provider_logo(p: &str) -> Option<ImageSource<'static>> {
+pub(crate) fn provider_logo(p: &str) -> Option<ImageSource<'static>> {
     Some(match p {
         "Anthropic" => include_image!("../assets/logos/claude-color.png"),
         "Google" => include_image!("../assets/logos/gemini-color.png"),
@@ -138,7 +222,7 @@ pub fn provider_color(p: &str) -> Color32 {
     }
 }
 
-fn agent_color(name: &str) -> Color32 {
+pub(crate) fn agent_color(name: &str) -> Color32 {
     match name {
         "Claude Code" => provider_color("Anthropic"),
         "Antigravity" => provider_color("Google"),
@@ -149,7 +233,7 @@ fn agent_color(name: &str) -> Color32 {
 }
 
 /// Logo si lo hay; si no, un punto de color.
-fn paint_icon(ui: &egui::Ui, center: Pos2, size: f32, logo: Option<ImageSource<'static>>, color: Color32) {
+pub(crate) fn paint_icon(ui: &egui::Ui, center: Pos2, size: f32, logo: Option<ImageSource<'static>>, color: Color32) {
     match logo {
         Some(src) => {
             egui::Image::new(src).paint_at(ui, Rect::from_center_size(center, Vec2::splat(size)));
@@ -190,52 +274,56 @@ impl App {
         self.header(ui, s, &mut act, header_h);
         ui.add_space(12.0);
 
-        ui.columns(4, |c| {
-            let t = &s.cur;
-            let p = s.prev.as_ref();
-            let cache_pct = if t.input > 0 { t.cache_read as f64 / t.input as f64 * 100.0 } else { 0.0 };
-            let per_turn = if t.turns > 0 { t.output / t.turns } else { 0 };
-            let col = |i: usize| -> Vec<u64> {
-                s.days.iter().map(|d| match i { 0 => d.1, 1 => d.2, 2 => d.3, _ => d.4 as u64 }).collect()
-            };
-            card(&mut c[0], card_h, "Tokens de entrada", human(t.input), p.and_then(|p| change(t.input as f64, p.input as f64)),
-                format!("{cache_pct:.0}% desde caché"), &col(0));
-            card(&mut c[1], card_h, "Tokens de salida", human(t.output), p.and_then(|p| change(t.output as f64, p.output as f64)),
-                format!("{} por turno", human(per_turn)), &col(1));
-            card(&mut c[2], card_h, "Tareas", thousands(t.tasks), p.and_then(|p| change(t.tasks as f64, p.tasks as f64)),
-                format!("{} turnos", thousands(t.turns)), &col(2));
-            card(&mut c[3], card_h, "Tiempo de agentes", duration(t.agent_secs), p.and_then(|p| change(t.agent_secs as f64, p.agent_secs as f64)),
-                format!("hasta {} a la vez", t.max_concurrent), &col(3));
-        });
-        ui.add_space(14.0);
+        if self.tab == Tab::Plans {
+            gui_plans::show_plans_view(ui, &self.events, self.range, &mut self.config, &mut self.plans_state);
+        } else {
+            ui.columns(4, |c| {
+                let t = &s.cur;
+                let p = s.prev.as_ref();
+                let cache_pct = if t.input > 0 { t.cache_read as f64 / t.input as f64 * 100.0 } else { 0.0 };
+                let per_turn = if t.turns > 0 { t.output / t.turns } else { 0 };
+                let col = |i: usize| -> Vec<u64> {
+                    s.days.iter().map(|d| match i { 0 => d.1, 1 => d.2, 2 => d.3, _ => d.4 as u64 }).collect()
+                };
+                card(&mut c[0], card_h, "Tokens de entrada", human(t.input), p.and_then(|p| change(t.input as f64, p.input as f64)),
+                    format!("{cache_pct:.0}% desde caché"), &col(0));
+                card(&mut c[1], card_h, "Tokens de salida", human(t.output), p.and_then(|p| change(t.output as f64, p.output as f64)),
+                    format!("{} por turno", human(per_turn)), &col(1));
+                card(&mut c[2], card_h, "Tareas", thousands(t.tasks), p.and_then(|p| change(t.tasks as f64, p.tasks as f64)),
+                    format!("{} turnos", thousands(t.turns)), &col(2));
+                card(&mut c[3], card_h, "Tiempo de agentes", duration(t.agent_secs), p.and_then(|p| change(t.agent_secs as f64, p.agent_secs as f64)),
+                    format!("hasta {} a la vez", t.max_concurrent), &col(3));
+            });
+            ui.add_space(14.0);
 
-        ui.columns(2, |c| {
-            let total_in: u64 = s.days.iter().map(|d| d.1).sum();
-            let per_day = if s.active_days > 0 { total_in / s.active_days as u64 } else { 0 };
-            section(&mut c[0], "TOKENS POR DÍA",
-                &format!("{} de {} días con agentes · {}/día", s.active_days, s.days.len(), human(per_day)));
-            days_chart(&mut c[0], s, charts_h - SECTION_H);
-            heat_section(&mut c[1], s, charts_h - SECTION_H);
-        });
-        ui.add_space(14.0);
+            ui.columns(2, |c| {
+                let total_in: u64 = s.days.iter().map(|d| d.1).sum();
+                let per_day = if s.active_days > 0 { total_in / s.active_days as u64 } else { 0 };
+                section(&mut c[0], "TOKENS POR DÍA",
+                    &format!("{} de {} días con agentes · {}/día", s.active_days, s.days.len(), human(per_day)));
+                days_chart(&mut c[0], s, charts_h - SECTION_H);
+                heat_section(&mut c[1], s, charts_h - SECTION_H);
+            });
+            ui.add_space(14.0);
 
-        let mut open_all = false;
-        ui.columns(2, |c| {
-            open_all = models_section(&mut c[0], s, tables_h);
-            if let Some(f) = agents_section(&mut c[1], &cache.agents, self.filter.as_deref()) {
-                act.filter = Some(f);
+            let mut open_all = false;
+            ui.columns(2, |c| {
+                open_all = models_section(&mut c[0], s, tables_h);
+                if let Some(f) = agents_section(&mut c[1], &cache.agents, self.filter.as_deref()) {
+                    act.filter = Some(f);
+                }
+            });
+
+            for w in &self.warnings {
+                ui.label(RichText::new(format!("Aviso: {w}")).color(BAD));
             }
-        });
 
-        for w in &self.warnings {
-            ui.label(RichText::new(format!("Aviso: {w}")).color(BAD));
-        }
-
-        if open_all {
-            self.all_models_open = true;
-        }
-        if self.all_models_open {
-            all_models_window(ui.ctx(), s, &mut self.all_models_open);
+            if open_all {
+                self.all_models_open = true;
+            }
+            if self.all_models_open {
+                all_models_window(ui.ctx(), s, &mut self.all_models_open);
+            }
         }
 
         self.cache = Some(cache);
@@ -244,6 +332,9 @@ impl App {
         }
         if let Some(f) = act.filter {
             self.filter = f;
+        }
+        if let Some(t) = act.tab {
+            self.tab = t;
         }
         if act.reload {
             self.start_load(ui.ctx());
@@ -257,13 +348,15 @@ impl App {
             ui.vertical(|ui| {
                 ui.horizontal(|ui| {
                     ui.label(RichText::new("Tokenscopio").size(20.0).strong().color(TEXT));
-                    if let Some(f) = &self.filter {
-                        ui.add_space(6.0);
-                        let b = egui::Button::new(RichText::new(format!("{f}  ✕")).size(13.0).color(TEXT))
-                            .fill(Color32::from_rgb(40, 40, 40))
-                            .corner_radius(10.0);
-                        if ui.add(b).on_hover_text("Quitar filtro").clicked() {
-                            act.filter = Some(None);
+                    if self.tab == Tab::Overview {
+                        if let Some(f) = &self.filter {
+                            ui.add_space(6.0);
+                            let b = egui::Button::new(RichText::new(format!("{f}  ✕")).size(13.0).color(TEXT))
+                                .fill(Color32::from_rgb(40, 40, 40))
+                                .corner_radius(10.0);
+                            if ui.add(b).on_hover_text("Quitar filtro").clicked() {
+                                act.filter = Some(None);
+                            }
                         }
                     }
                 });
@@ -295,6 +388,23 @@ impl App {
                                 .min_size(Vec2::new(70.0, 26.0));
                             if ui.add(b).clicked() {
                                 act.range = Some(r);
+                            }
+                        }
+                    });
+                });
+                ui.add_space(12.0);
+                egui::Frame::new().fill(CARD).stroke(Stroke::new(1.0f32, BORDER)).corner_radius(8.0).inner_margin(3.0).show(ui, |ui| {
+                    ui.horizontal(|ui| {
+                        ui.spacing_mut().item_spacing.x = 2.0;
+                        for (t, label) in [(Tab::Plans, "Planes"), (Tab::Overview, "Resumen")] {
+                            let sel = t == self.tab;
+                            let b = egui::Button::new(RichText::new(label).size(14.0).color(if sel { TEXT } else { DIM }))
+                                .fill(if sel { Color32::from_rgb(48, 48, 48) } else { Color32::TRANSPARENT })
+                                .stroke(Stroke::NONE)
+                                .corner_radius(6.0)
+                                .min_size(Vec2::new(76.0, 26.0));
+                            if ui.add(b).clicked() {
+                                act.tab = Some(t);
                             }
                         }
                     });
@@ -361,7 +471,7 @@ fn card(ui: &mut egui::Ui, h: f32, label: &str, value: String, delta: Option<Str
         });
 }
 
-fn section(ui: &mut egui::Ui, title: &str, right: &str) {
+pub(crate) fn section(ui: &mut egui::Ui, title: &str, right: &str) {
     let (rect, _) = ui.allocate_exact_size(Vec2::new(ui.available_width(), SECTION_H), Sense::hover());
     let p = ui.painter();
     let y = rect.top() + 9.0;

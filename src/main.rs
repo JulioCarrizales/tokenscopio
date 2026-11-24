@@ -1,6 +1,7 @@
 // En release no abre una consola negra detrás de la ventana.
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
+mod alerts;
 mod collectors;
 mod config;
 mod gui;
@@ -11,6 +12,7 @@ mod portfolio;
 mod pricing;
 mod quotas;
 mod stats;
+mod tray;
 
 use eframe::egui;
 

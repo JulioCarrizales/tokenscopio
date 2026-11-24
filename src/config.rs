@@ -16,6 +16,39 @@ pub struct Subscription {
     pub agents: Vec<String>,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct NotificationsConfig {
+    #[serde(default = "default_true")]
+    pub minimize_to_tray: bool,
+    #[serde(default = "default_true")]
+    pub alerts_enabled: bool,
+    #[serde(default = "default_true")]
+    pub alert_quota_yellow: bool,
+    #[serde(default = "default_true")]
+    pub alert_quota_red: bool,
+    #[serde(default = "default_true")]
+    pub alert_quota_reset: bool,
+    #[serde(default = "default_true")]
+    pub alert_pace_peak: bool,
+}
+
+fn default_true() -> bool {
+    true
+}
+
+impl Default for NotificationsConfig {
+    fn default() -> Self {
+        Self {
+            minimize_to_tray: true,
+            alerts_enabled: true,
+            alert_quota_yellow: true,
+            alert_quota_red: true,
+            alert_quota_reset: true,
+            alert_pace_peak: true,
+        }
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Config {
     #[serde(default = "default_display_currency")]
@@ -28,6 +61,9 @@ pub struct Config {
     /// Tabla editable de precios por modelo (USD por 1M tokens).
     #[serde(default = "pricing::default_prices")]
     pub model_prices: BTreeMap<String, ModelPrice>,
+    /// Preferencias de bandeja del sistema y alertas locales.
+    #[serde(default)]
+    pub notifications: NotificationsConfig,
 }
 
 fn default_display_currency() -> String {
@@ -56,6 +92,7 @@ impl Default for Config {
             exchange_rates: default_exchange_rates(),
             subscriptions: Vec::new(),
             model_prices: pricing::default_prices(),
+            notifications: NotificationsConfig::default(),
         }
     }
 }
@@ -187,5 +224,51 @@ mod tests {
         let s = serde_json::to_string_pretty(&cfg).unwrap();
         let parsed: Config = serde_json::from_str(&s).unwrap();
         assert_eq!(cfg, parsed);
+    }
+
+    #[test]
+    fn legacy_json_without_notifications_uses_defaults() {
+        let legacy = r#"{
+            "display_currency": "MXN",
+            "exchange_rates": { "USD": 1.0, "MXN": 17.5 },
+            "subscriptions": []
+        }"#;
+        let parsed: Config = serde_json::from_str(legacy).unwrap();
+        assert_eq!(parsed.display_currency, "MXN");
+        assert_eq!(parsed.notifications, NotificationsConfig::default());
+        assert!(parsed.notifications.minimize_to_tray);
+        assert!(parsed.notifications.alerts_enabled);
+        assert!(parsed.notifications.alert_quota_yellow);
+        assert!(parsed.notifications.alert_quota_red);
+        assert!(parsed.notifications.alert_quota_reset);
+        assert!(parsed.notifications.alert_pace_peak);
+
+        let partial = r#"{ "notifications": { "alerts_enabled": false } }"#;
+        let parsed_partial: Config = serde_json::from_str(partial).unwrap();
+        assert!(!parsed_partial.notifications.alerts_enabled);
+        assert!(parsed_partial.notifications.minimize_to_tray);
+        assert!(parsed_partial.notifications.alert_pace_peak);
+    }
+
+    #[test]
+    fn json_roundtrip_preserves_custom_notifications() {
+        let mut cfg = Config::default();
+        cfg.notifications = NotificationsConfig {
+            minimize_to_tray: false,
+            alerts_enabled: true,
+            alert_quota_yellow: false,
+            alert_quota_red: true,
+            alert_quota_reset: false,
+            alert_pace_peak: false,
+        };
+        let s = serde_json::to_string_pretty(&cfg).unwrap();
+        let parsed: Config = serde_json::from_str(&s).unwrap();
+        assert_eq!(cfg, parsed);
+        assert!(!parsed.notifications.minimize_to_tray);
+        assert!(parsed.notifications.alerts_enabled);
+        assert!(!parsed.notifications.alert_quota_yellow);
+        assert!(parsed.notifications.alert_quota_red);
+        assert!(!parsed.notifications.alert_quota_reset);
+        assert!(!parsed.notifications.alert_pace_peak);
     }
 }

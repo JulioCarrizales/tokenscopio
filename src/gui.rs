@@ -172,7 +172,7 @@ impl App {
         });
         if let Some(img) = captured {
             let name = match sn.step {
-                0 => "screenshot.png",
+                0 => "screenshot-overview.png",
                 1 => "screenshot-plans.png",
                 _ => "screenshot-quotas.png",
             };

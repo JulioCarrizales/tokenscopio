@@ -9,7 +9,18 @@
   Hecho en Rust · un solo <code>.exe</code> · 100% local · funciona con tus planes Pro, sin claves de API.
 </p>
 
-![Captura de Tokenscopio](docs/screenshot.png)
+![Captura de Tokenscopio — Resumen](docs/screenshot.png)
+
+<details>
+<summary>Ver capturas de las pestañas <b>Planes</b> y <b>Cuotas</b></summary>
+
+#### Planes (portafolio de suscripciones y rendimiento)
+![Captura de Tokenscopio — Planes](docs/screenshot-plans.png)
+
+#### Cuotas (semáforo oficial y ritmo local 5 h / 7 días)
+![Captura de Tokenscopio — Cuotas](docs/screenshot-quotas.png)
+
+</details>
 
 ## ¿Qué muestra?
 
@@ -18,7 +29,7 @@
 - **Tokens por día** (entrada arriba, salida abajo) y un **heatmap** de a qué hora trabajan tus agentes.
 - **Modelos y agentes**: clic en un agente para ver solo su uso.
 - **Portafolio de suscripciones** (pestaña **Planes**): registra tus suscripciones (proveedor, nombre, precio mensual, moneda y agentes que cubre) y compáralas contra el valor equivalente en API prorrateado al rango seleccionado, con rendimiento (`12.4x`), semáforo (verde ≥ 3x, amarillo 1–3x, rojo < 1x) y tabla de precios por modelo editable.
-- **Semáforo de cuotas con recomendación** (pestaña **Cuotas**): lee los límites locales disponibles (p. ej. `rate_limits` de Codex en `~/.codex/sessions`), muestra % usado, ventana y cuándo se reinicia, y da una recomendación en una línea (con la regla explicada en un tooltip). Los agentes que no guardan cuotas en disco se muestran como `sin datos de cuota`.
+- **Semáforo de cuotas y ritmo local** (pestaña **Cuotas**): lee los límites oficiales disponibles en disco (p. ej. `rate_limits` de Codex en `~/.codex/sessions`) mostrando % usado, ventana y reinicio, y da una recomendación en una línea (con la regla en tooltip). Además, para **todos** los agentes muestra el **ritmo local real** de las últimas **5 h** y **7 días** comparado contra tu propio pico histórico (los agentes sin límites en disco aparecen como `Sin límite oficial`).
 - **Auto-recarga silenciosa**: refresca los logs locales automáticamente cada 60 segundos en segundo plano sin congelar la interfaz.
 - Rangos de 7, 30 y 90 días o todo el historial.
 
@@ -71,6 +82,7 @@ El ejecutable queda en `target\release\tokenscopio.exe`.
 - **Turno**: una llamada al modelo. **Tarea**: una sesión o conversación.
 - **Tiempo de agentes**: suma de los intervalos entre llamadas de cada sesión; los huecos de más de 5 minutos no cuentan.
 - **Hasta N a la vez**: máximo de sesiones cuyos intervalos (de la primera a la última llamada) se solapan.
+- **Ritmo local (5 h y 7 días)**: suma de tokens en las últimas 5 h y 7 días comparada contra el máximo histórico de cada agente en una ventana deslizante equivalente.
 - Codex guarda totales acumulados por sesión; se usan las diferencias entre eventos.
 
 ## Estructura
@@ -78,14 +90,17 @@ El ejecutable queda en `target\release\tokenscopio.exe`.
 ```
 src/
   collectors/   un lector por agente + decodificador de protobuf
-  config.rs     configuración local (%APPDATA%\Tokenscopio\config.json)
+  model.rs      modelo común de eventos de uso y normalización de nombres
+  config.rs     configuración local (%APPDATA%\Tokenscopio\config.json, planes, monedas y preferencias de alertas/bandeja)
   pricing.rs    tabla de precios por modelo (USD por 1M tokens)
-  portfolio.rs  cálculo de valor equivalente en API, prorrateo y rendimiento
-  quotas.rs     lectura local de cuotas/límites por agente y recomendación
+  portfolio.rs  cálculo de valor equivalente en API, prorrateo, rendimiento, tendencia mensual, proyección y simulador
+  quotas.rs     lectura local de cuotas/límites por agente, ritmo local 5 h / 7 días y recomendación
+  alerts.rs     motor local de transiciones de alertas (cuotas, reinicios y picos de 5 h) y tooltip de bandeja
+  tray.rs       bandeja del sistema y notificaciones nativas de Windows (FFI Win32, sin dependencias extra)
   stats.rs      totales, series por día, heatmap, agrupación por modelo y agente
   gui.rs        interfaz principal (egui) y auto-recarga cada 60 s
   gui_plans.rs  vista de Portafolio de suscripciones y editor de precios
-  gui_quotas.rs vista de Semáforo de cuotas y recomendación
+  gui_quotas.rs vista de Semáforo de cuotas, ritmo local y recomendación
   main.rs       ventana e ícono
 assets/         ícono de la app y logos de marcas
 ```

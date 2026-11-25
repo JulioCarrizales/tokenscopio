@@ -172,9 +172,9 @@ impl App {
         });
         if let Some(img) = captured {
             let name = match sn.step {
-                0 => "plan4_resumen.png",
-                1 => "plan4_cuotas.png",
-                _ => "plan4_planes.png",
+                0 => "screenshot.png",
+                1 => "screenshot-plans.png",
+                _ => "screenshot-quotas.png",
             };
             let _ = std::fs::create_dir_all(&sn.dir);
             let _ = image::save_buffer(
@@ -185,14 +185,23 @@ impl App {
                 image::ColorType::Rgba8,
             );
             sn.pending = false;
-            if sn.step == 0 {
-                sn.step = 1;
-                sn.wait = 4;
-                self.tab = Tab::Quotas;
-                ctx.request_repaint();
-            } else {
-                self.snap = None;
-                ctx.send_viewport_cmd(egui::ViewportCommand::Close);
+            match sn.step {
+                0 => {
+                    sn.step = 1;
+                    sn.wait = 4;
+                    self.tab = Tab::Plans;
+                    ctx.request_repaint();
+                }
+                1 => {
+                    sn.step = 2;
+                    sn.wait = 4;
+                    self.tab = Tab::Quotas;
+                    ctx.request_repaint();
+                }
+                _ => {
+                    self.snap = None;
+                    ctx.send_viewport_cmd(egui::ViewportCommand::Close);
+                }
             }
             return;
         }
